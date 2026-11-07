@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark Cyber Palette -->
+    <color name="bg_main">#0A0D14</color>
+    <color name="bg_card">#121622</color>
+    <color name="bg_card_secondary">#181D2D</color>
+    <color name="border_card">#232A3E</color>
+    <color name="border_card_highlight">#3D4A6E</color>
+
+    <!-- Neon Accents -->
+    <color name="accent_purple">#8B5CF6</color>
+    <color name="accent_indigo">#6366F1</color>
+    <color name="accent_cyan">#06B6D4</color>
+    <color name="accent_gold">#F59E0B</color>
+
+    <!-- Signal Colors -->
+    <color name="signal_call">#00E676</color>
+    <color name="signal_call_bg">#11291D</color>
+    <color name="signal_call_border">#1D4A33</color>
+
+    <color name="signal_put">#FF1744</color>
+    <color name="signal_put_bg">#2D121B</color>
+    <color name="signal_put_border">#541B2B</color>
+
+    <!-- Text Colors -->
+    <color name="text_primary">#F8FAFC</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_muted">#64748B</color>
+    <color name="text_green">#10B981</color>
+    <color name="text_red">#EF4444</color>
+
+    <!-- Neutral -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="transparent">#00000000</color>
+</resources>

@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.BinaryOptionsAISignal" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent_purple</item>
+        <item name="colorPrimaryVariant">@color/accent_indigo</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="android:statusBarColor">@color/bg_main</item>
+        <item name="android:navigationBarColor">@color/bg_main</item>
+        <item name="android:windowBackground">@color/bg_main</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

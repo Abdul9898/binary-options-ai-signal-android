@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Binary Options AI Signal</string>
+    <string name="brand_title">Binary\nOptions</string>
+    <string name="brand_subtitle">AI SIGNAL</string>
+    <string name="live_engine">LIVE ENGINE ACTIVE</string>
+    <string name="win_rate_label">AI WIN RATE: 92.4%</string>
+    <string name="broker">Broker</string>
+    <string name="telegram">Telegram</string>
+    <string name="alerts">Alerts: ON</string>
+    <string name="scan_now">SCAN NOW</string>
+    <string name="call_action">CALL 🔼</string>
+    <string name="put_action">PUT 🔽</string>
+</resources>
