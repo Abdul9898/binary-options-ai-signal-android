@@ -90,7 +90,7 @@ class SignalBackgroundService : Service() {
 
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("⚡ ${signal.pair} -> ${signal.direction}")
-            .setContentText("${signal.direction} (${signal.expirySeconds / 60}M) @ ${signal.strikePrice} • Conf: ${signal.confidence}%")
+            .setContentText("${signal.direction} (${signal.durationTicks} Ticks) @ ${signal.strikePrice} • Conf: ${signal.confidence}%")
             .setSubText(signal.reason)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setSound(soundUri)

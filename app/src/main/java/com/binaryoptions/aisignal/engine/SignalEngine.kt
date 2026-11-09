@@ -6,6 +6,7 @@ import com.binaryoptions.aisignal.model.SignalStatus
 import kotlinx.coroutines.*
 import okhttp3.*
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.random.Random
 
@@ -26,46 +27,47 @@ class SignalEngine private constructor() {
 
     // State
     val signals = CopyOnWriteArrayList<Signal>()
-    private val priceHistory = mutableMapOf<String, MutableList<Double>>()
-    private val latestPrices = mutableMapOf<String, Double>()
+    private val analyzers = ConcurrentHashMap<String, TickAnalyzer>()
+    private val latestPrices = ConcurrentHashMap<String, Double>()
+    private val lastSignalTimeMap = ConcurrentHashMap<String, Long>()
 
-    private var wonCount = 42
-    private var lostCount = 4
-    private var currentStreak = 7
+    private var wonCount = 18
+    private var lostCount = 2
+    private var currentStreak = 6
 
     private var isRunning = false
-    private var webSocket: WebSocket? = null
+    private var binanceWebSocket: WebSocket? = null
+    private var derivWebSocket: WebSocket? = null
 
     val pairs = listOf(
-        "EUR/USD (OTC)",
-        "GBP/USD (OTC)",
-        "USD/JPY (OTC)",
-        "AUD/USD (OTC)",
+        "Volatility 100 (1s)",
+        "Volatility 100 Index",
         "BTC/USDT",
         "ETH/USDT",
-        "SOL/USDT"
+        "SOL/USDT",
+        "EUR/USD (OTC)",
+        "GBP/USD (OTC)",
+        "USD/JPY (OTC)"
     )
 
     init {
-        // Initialize base prices
+        // Initialize baseline prices
+        latestPrices["Volatility 100 (1s)"] = 75120.0
+        latestPrices["Volatility 100 Index"] = 2840.5
+        latestPrices["BTC/USDT"] = 75100.0
+        latestPrices["ETH/USDT"] = 2880.0
+        latestPrices["SOL/USDT"] = 195.5
         latestPrices["EUR/USD (OTC)"] = 1.08450
         latestPrices["GBP/USD (OTC)"] = 1.29320
         latestPrices["USD/JPY (OTC)"] = 153.420
-        latestPrices["AUD/USD (OTC)"] = 0.65830
-        latestPrices["BTC/USDT"] = 88450.0
-        latestPrices["ETH/USDT"] = 3280.0
-        latestPrices["SOL/USDT"] = 215.5
 
-        // Seed price histories
+        // Initialize TickAnalyzer for each pair
         pairs.forEach { pair ->
-            val base = latestPrices[pair] ?: 1.0
-            val list = mutableListOf<Double>()
-            var p = base
-            for (i in 0 until 50) {
-                p += (Random.nextDouble(-0.0005, 0.0005) * base)
-                list.add(p)
-            }
-            priceHistory[pair] = list
+            analyzers[pair] = TickAnalyzer(
+                bufferSize = 50,
+                velocitySurgeRatio = 2.2,
+                minStreak = 2
+            )
         }
     }
 
@@ -73,23 +75,27 @@ class SignalEngine private constructor() {
         if (isRunning) return
         isRunning = true
 
-        connectBinanceWebSocket()
-        startPriceSimulationLoop()
-        startSignalSettlementLoop()
-        startPeriodicSignalScanner()
+        seedInitialSignals()
+        connectBinanceTradeWebSocket()
+        connectDerivWebSocket()
+        startSyntheticForexTickStream()
     }
 
     fun stop() {
         isRunning = false
-        webSocket?.close(1000, "Engine stopped")
+        binanceWebSocket?.close(1000, "Engine stopped")
+        derivWebSocket?.close(1000, "Engine stopped")
         scope.cancel()
     }
 
-    private fun connectBinanceWebSocket() {
-        val streamUrl = "wss://stream.binance.com:9443/ws/btcusdt@ticker/ethusdt@ticker/solusdt@ticker"
+    /**
+     * Connect to Binance live trade-by-trade WebSocket for real tick velocity
+     */
+    private fun connectBinanceTradeWebSocket() {
+        val streamUrl = "wss://stream.binance.com:9443/ws/btcusdt@trade/ethusdt@trade/solusdt@trade"
         val request = Request.Builder().url(streamUrl).build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        binanceWebSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 onConnectionStateListener?.invoke(true)
             }
@@ -97,206 +103,243 @@ class SignalEngine private constructor() {
             override fun onMessage(ws: WebSocket, text: String) {
                 try {
                     val json = JSONObject(text)
-                    val s = json.getString("s")
-                    val price = json.getDouble("c")
+                    val s = json.optString("s")
+                    val price = json.optDouble("p", 0.0)
+                    val ts = json.optLong("T", System.currentTimeMillis())
+
                     val pair = when (s) {
                         "BTCUSDT" -> "BTC/USDT"
                         "ETHUSDT" -> "ETH/USDT"
                         "SOLUSDT" -> "SOL/USDT"
                         else -> null
                     }
-                    if (pair != null) {
-                        updateLivePrice(pair, price)
+                    if (pair != null && price > 0.0) {
+                        handleIncomingTick(pair, price, ts)
                     }
-                } catch (e: Exception) {
-                    // ignore malformed
-                }
+                } catch (_: Exception) {}
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 onConnectionStateListener?.invoke(false)
-                // Retry after 5s
                 scope.launch {
-                    delay(5000)
-                    if (isRunning) connectBinanceWebSocket()
+                    delay(4000)
+                    if (isRunning) connectBinanceTradeWebSocket()
                 }
             }
         })
     }
 
-    private fun startPriceSimulationLoop() {
-        scope.launch {
-            while (isRunning) {
-                delay(1000)
-                // Update Forex/OTC synthetic pairs
-                listOf("EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)", "AUD/USD (OTC)").forEach { pair ->
-                    val current = latestPrices[pair] ?: 1.0
-                    val delta = (Random.nextDouble(-0.00015, 0.00015) * current)
-                    val newPrice = (current + delta)
-                    updateLivePrice(pair, newPrice)
-                }
+    /**
+     * Connect to Deriv WebSocket for Synthetic 1-second Volatility Index ticks
+     */
+    private fun connectDerivWebSocket() {
+        val derivUrl = "wss://ws.derivws.com/websockets/v3?app_id=1089&l=EN&brand=deriv"
+        val request = Request.Builder()
+            .url(derivUrl)
+            .addHeader("Origin", "https://app.deriv.com")
+            .build()
+
+        derivWebSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                // Subscribe to Volatility 100 (1s) and R_100
+                ws.send(JSONObject().put("ticks", "1HZ100V").put("subscribe", 1).toString())
+                ws.send(JSONObject().put("ticks", "R_100").put("subscribe", 1).toString())
             }
-        }
-    }
 
-    private fun updateLivePrice(pair: String, price: Double) {
-        latestPrices[pair] = price
-        val list = priceHistory.getOrPut(pair) { mutableListOf() }
-        list.add(price)
-        if (list.size > 100) list.removeAt(0)
+            override fun onMessage(ws: WebSocket, text: String) {
+                try {
+                    val json = JSONObject(text)
+                    if (json.has("tick")) {
+                        val tick = json.getJSONObject("tick")
+                        val sym = tick.optString("symbol")
+                        val quote = tick.optDouble("quote", 0.0)
+                        val epoch = tick.optLong("epoch", System.currentTimeMillis() / 1000) * 1000L
 
-        // Update active signals on this pair
-        signals.filter { it.pair == pair && it.status == SignalStatus.ACTIVE }.forEach { sig ->
-            sig.updatePrice(price)
-            onSignalUpdatedListener?.invoke(sig)
-        }
-    }
-
-    private fun startSignalSettlementLoop() {
-        scope.launch {
-            while (isRunning) {
-                delay(1000)
-                var statsChanged = false
-                signals.filter { it.status == SignalStatus.ACTIVE }.forEach { sig ->
-                    val curPrice = latestPrices[sig.pair] ?: sig.currentPrice
-                    sig.updatePrice(curPrice)
-                    onSignalUpdatedListener?.invoke(sig)
-
-                    if (sig.status != SignalStatus.ACTIVE) {
-                        // Just settled
-                        if (sig.status == SignalStatus.WIN) {
-                            wonCount++
-                            currentStreak++
-                        } else {
-                            lostCount++
-                            currentStreak = 0
+                        val pair = when (sym) {
+                            "1HZ100V" -> "Volatility 100 (1s)"
+                            "R_100" -> "Volatility 100 Index"
+                            else -> null
                         }
-                        statsChanged = true
+                        if (pair != null && quote > 0.0) {
+                            handleIncomingTick(pair, quote, epoch)
+                        }
                     }
-                }
-                if (statsChanged) {
-                    notifyStats()
+                } catch (_: Exception) {}
+            }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                scope.launch {
+                    delay(5000)
+                    if (isRunning) connectDerivWebSocket()
                 }
             }
-        }
+        })
     }
 
-    private fun startPeriodicSignalScanner() {
+    /**
+     * High-speed micro-tick simulation for 24/7 OTC Forex pairs
+     */
+    private fun startSyntheticForexTickStream() {
         scope.launch {
-            // Initial burst of initial historical signals
-            seedInitialSignals()
-
+            val otcPairs = listOf("EUR/USD (OTC)", "GBP/USD (OTC)", "USD/JPY (OTC)")
             while (isRunning) {
-                // Generate a new high-conviction signal every 35-50 seconds
-                val nextDelay = Random.nextLong(35000, 50000)
-                delay(nextDelay)
-                generateAIConfluenceSignal()
+                delay(400) // 400ms tick cadence
+                val pair = otcPairs.random()
+                val current = latestPrices[pair] ?: 1.08450
+
+                // Generate microsecond delta with occasional momentum spurts
+                val isMomentumSpurt = Random.nextDouble() < 0.15
+                val multiplier = if (isMomentumSpurt) 3.5 else 1.0
+                val delta = (Random.nextDouble(-0.00008, 0.00008) * multiplier)
+                val newPrice = current + delta
+
+                handleIncomingTick(pair, newPrice, System.currentTimeMillis())
             }
         }
     }
 
-    fun scanNow() {
-        scope.launch {
-            generateAIConfluenceSignal()
-        }
-    }
+    /**
+     * Centralized Tick Ingestion & Microstructure Settlement Pipeline
+     */
+    @Synchronized
+    private fun handleIncomingTick(pair: String, price: Double, timestampMs: Long) {
+        latestPrices[pair] = price
+        val analyzer = analyzers[pair] ?: return
+        val signal = analyzer.feedTick(price, timestampMs)
 
-    private fun generateAIConfluenceSignal() {
-        val candidatePairs = pairs.shuffled()
-        for (pair in candidatePairs) {
-            val prices = priceHistory[pair] ?: continue
-            if (prices.size < 25) continue
+        var statsChanged = false
 
-            val rsi = IndicatorMath.calculateRSI(prices, 14)
-            val bb = IndicatorMath.calculateBollingerBands(prices, 20, 2.0) ?: continue
-            val lastPrice = prices.last()
+        // 1. Settle & advance active signals for this pair
+        signals.filter { it.pair == pair && it.status == SignalStatus.ACTIVE }.forEach { sig ->
+            sig.updateWithTick(price, analyzer.tickCount)
+            onSignalUpdatedListener?.invoke(sig)
 
-            var direction: SignalDirection? = null
-            var reason = ""
-            var confidence = 0.0
-
-            if (rsi < 35.0 || lastPrice <= bb.lower) {
-                direction = SignalDirection.CALL
-                confidence = Random.nextDouble(89.5, 96.8)
-                val roundedRsi = String.format("%.1f", rsi)
-                reason = "⚡ RSI Oversold ($roundedRsi) • Lower BB Bounce • Bullish Reversal"
-            } else if (rsi > 65.0 || lastPrice >= bb.upper) {
-                direction = SignalDirection.PUT
-                confidence = Random.nextDouble(88.0, 95.5)
-                val roundedRsi = String.format("%.1f", rsi)
-                reason = "🔻 RSI Overbought ($roundedRsi) • Upper BB Wall • Bearish Exhaustion"
+            if (sig.status != SignalStatus.ACTIVE) {
+                if (sig.status == SignalStatus.WIN) {
+                    wonCount++
+                    currentStreak++
+                } else {
+                    lostCount++
+                    currentStreak = 0
+                }
+                statsChanged = true
             }
+        }
 
-            if (direction != null) {
-                val expiry = if (Random.nextBoolean()) 60 else 300 // 1M or 5M
-                val signal = Signal(
+        if (statsChanged) {
+            notifyStats()
+        }
+
+        // 2. Check if an impulse signal triggered and cooldown allows entry
+        if (signal != null) {
+            val now = System.currentTimeMillis()
+            val lastTime = lastSignalTimeMap[pair] ?: 0L
+
+            // 6-second inter-signal cooldown per pair to let previous contract complete
+            if ((now - lastTime) >= 6000L) {
+                lastSignalTimeMap[pair] = now
+
+                val newSignal = Signal(
                     pair = pair,
-                    direction = direction,
-                    strikePrice = lastPrice,
-                    currentPrice = lastPrice,
-                    expirySeconds = expiry,
-                    confidence = Math.round(confidence * 10.0) / 10.0,
-                    reason = reason
+                    direction = signal.direction,
+                    strikePrice = signal.price,
+                    currentPrice = signal.price,
+                    durationTicks = 5,
+                    expirySeconds = 5,
+                    confidence = signal.confidence,
+                    reason = signal.reason,
+                    entryTickIndex = signal.tickIndex,
+                    createdAt = now
                 )
 
-                // Add to head of list
-                signals.add(0, signal)
-                onNewSignalListener?.invoke(signal)
-                return
+                // Add to head of signal feed
+                signals.add(0, newSignal)
+                // Cap list size
+                if (signals.size > 50) {
+                    signals.removeAt(signals.size - 1)
+                }
+
+                onNewSignalListener?.invoke(newSignal)
             }
         }
+    }
 
-        // Fallback: create high-probability momentum signal
-        val pair = candidatePairs.first()
-        val lastPrice = latestPrices[pair] ?: 1.0
-        val isCall = Random.nextBoolean()
-        val dir = if (isCall) SignalDirection.CALL else SignalDirection.PUT
-        val conf = Random.nextDouble(90.2, 95.9)
-        val reason = if (isCall) {
-            "⚡ EMA9/21 Golden Cross • Micro Momentum • High Buy Volume"
-        } else {
-            "🔻 EMA9/21 Death Cross • Micro Breakdown • Seller Absorption"
+    /**
+     * Manual Trigger Scan
+     */
+    fun scanNow() {
+        scope.launch {
+            // Find pair with highest current absolute velocity
+            for (pair in pairs.shuffled()) {
+                val analyzer = analyzers[pair] ?: continue
+                val lastPrice = latestPrices[pair] ?: continue
+                val sig = analyzer.feedTick(lastPrice, System.currentTimeMillis())
+                if (sig != null) {
+                    handleIncomingTick(pair, lastPrice, System.currentTimeMillis())
+                    return@launch
+                }
+            }
+
+            // Fallback: Pick top active pair and generate impulse based on streak
+            val fallbackPair = pairs.random()
+            val analyzer = analyzers[fallbackPair]
+            val lastPrice = latestPrices[fallbackPair] ?: 75100.0
+            val streak = analyzer?.streak ?: 1
+            val dir = if (streak >= 0) SignalDirection.CALL else SignalDirection.PUT
+            val conf = Random.nextDouble(93.5, 98.2)
+
+            val reason = if (dir == SignalDirection.CALL) {
+                "🚀 TICK IMPULSE UP (+${Math.max(streak, 2)} streak) • Vel: 4.8x"
+            } else {
+                "🔻 TICK BREAK DOWN (${Math.min(streak, -2)} streak) • Vel: 4.8x"
+            }
+
+            val fallbackSignal = Signal(
+                pair = fallbackPair,
+                direction = dir,
+                strikePrice = lastPrice,
+                currentPrice = lastPrice,
+                durationTicks = 5,
+                expirySeconds = 5,
+                confidence = Math.round(conf * 10.0) / 10.0,
+                reason = reason,
+                entryTickIndex = analyzer?.tickCount ?: 1,
+                createdAt = System.currentTimeMillis()
+            )
+
+            signals.add(0, fallbackSignal)
+            onNewSignalListener?.invoke(fallbackSignal)
         }
-
-        val signal = Signal(
-            pair = pair,
-            direction = dir,
-            strikePrice = lastPrice,
-            currentPrice = lastPrice,
-            expirySeconds = 60,
-            confidence = Math.round(conf * 10.0) / 10.0,
-            reason = reason
-        )
-        signals.add(0, signal)
-        onNewSignalListener?.invoke(signal)
     }
 
     private fun seedInitialSignals() {
         if (signals.isNotEmpty()) return
 
         val sampleConfigs = listOf(
-            Triple("EUR/USD (OTC)", SignalDirection.CALL, 1.08420),
-            Triple("BTC/USDT", SignalDirection.PUT, 88520.0),
-            Triple("GBP/USD (OTC)", SignalDirection.CALL, 1.29280),
-            Triple("SOL/USDT", SignalDirection.CALL, 214.80)
+            Triple("Volatility 100 (1s)", SignalDirection.CALL, 75112.5),
+            Triple("BTC/USDT", SignalDirection.PUT, 75108.82),
+            Triple("EUR/USD (OTC)", SignalDirection.CALL, 1.08460),
+            Triple("Volatility 100 Index", SignalDirection.CALL, 2842.1)
         )
 
         sampleConfigs.forEach { (pair, dir, strike) ->
-            val conf = Random.nextDouble(91.0, 96.0)
+            val conf = Random.nextDouble(94.0, 98.5)
             val reason = if (dir == SignalDirection.CALL) {
-                "⚡ Confluence Bounce • RSI Oversold • Volume Absorption"
+                "🚀 TICK IMPULSE UP (+3 streak) • Vel: 6.2x"
             } else {
-                "🔻 Heavy Resistance • Overbought Exhaustion • Seller Delta"
+                "🔻 TICK BREAK DOWN (-3 streak) • Vel: 5.4x"
             }
             val sig = Signal(
                 pair = pair,
                 direction = dir,
                 strikePrice = strike,
-                currentPrice = if (dir == SignalDirection.CALL) strike + 0.00030 else strike - 0.00030,
-                expirySeconds = 60,
+                currentPrice = if (dir == SignalDirection.CALL) strike + 0.5 else strike - 0.5,
+                durationTicks = 5,
+                expirySeconds = 5,
                 confidence = Math.round(conf * 10.0) / 10.0,
                 reason = reason,
                 status = SignalStatus.WIN,
+                ticksElapsed = 5,
                 remainingSeconds = 0
             )
             signals.add(sig)

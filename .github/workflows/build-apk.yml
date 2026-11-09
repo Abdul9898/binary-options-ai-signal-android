@@ -61,15 +61,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: v1.3.0
-          name: Binary Options AI Signal v1.3.0
+          tag_name: v2.0.0
+          name: Binary Options AI Signal v2.0.0 (Tick Sniper Edition)
           body: |
-            ### ⚡ Binary Options AI Signal v1.3.0 (Unrestricted Release)
-            - **No License Key Required:** Instant direct access to live signals dashboard.
-            - **Live Signal Engine:** Real-time CALL / PUT signals with confidence %, strike price, and countdown timer.
-            - **Technical Confluence:** Built-in RSI (14), Bollinger Bands, and EMA momentum detection.
-            - **Win Rate Scorecard:** Automatic live trade tracking and win-rate statistics.
-            - **Cyber Dark Theme:** OLED-friendly aesthetic with high-res branding.
+            ### ⚡ Binary Options AI Signal v2.0.0 (Tick Sniper Edition)
+            - **Tick-by-Tick Microstructure Impulse Engine:** Cracks entries on rapid momentum bursts before tick close.
+            - **5-Tick / Turbo Settlement:** Real-time tick countdown (`1/5`, `2/5`, `3/5`, `4/5`, `5/5`) and instant win/loss settlement.
+            - **Anti-Falling-Knife Guard:** Prevents false reversal buys during micro-crashes.
+            - **Multi-Feed Streaming:** Live Deriv Volatility Indices (`1HZ100V`, `R_100`) + Binance Live Trade WebSocket + 24/7 OTC Forex.
+            - **Zero Restrictions:** Completely unlocked release with vibration alerts and live win-rate tracker.
           files: output/BinaryOptionsAISignal.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

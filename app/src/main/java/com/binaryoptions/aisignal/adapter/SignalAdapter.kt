@@ -35,11 +35,11 @@ class SignalAdapter(
 
         fun bind(signal: Signal) {
             val context = itemView.context
-            val isCrypto = signal.pair.contains("USDT")
-            val priceFormat = if (isCrypto) "%.2f" else "%.5f"
+            val isTwoDecimal = signal.pair.contains("USDT") || signal.pair.contains("Volatility")
+            val priceFormat = if (isTwoDecimal) "%.2f" else "%.5f"
 
             binding.tvPair.text = signal.pair
-            binding.tvExpiry.text = if (signal.expirySeconds == 60) "1M EXPIRY" else "5M EXPIRY"
+            binding.tvExpiry.text = "${signal.durationTicks} TICKS"
             binding.tvStrikePrice.text = String.format(Locale.US, priceFormat, signal.strikePrice)
             binding.tvCurrentPrice.text = String.format(Locale.US, priceFormat, signal.currentPrice)
             binding.tvConfidence.text = "${signal.confidence}%"
@@ -64,23 +64,21 @@ class SignalAdapter(
                     binding.tvStatus.text = "ACTIVE ⏳"
                     binding.tvStatus.setBackgroundResource(R.drawable.bg_badge_expiry)
                     binding.tvStatus.setTextColor(ContextCompat.getColor(context, R.color.accent_gold))
-                    val mins = signal.remainingSeconds / 60
-                    val secs = signal.remainingSeconds % 60
-                    binding.tvCountdown.text = String.format(Locale.US, "%02d:%02ds", mins, secs)
+                    binding.tvCountdown.text = "${signal.ticksElapsed}/${signal.durationTicks} TICKS"
                     binding.tvCountdown.setTextColor(ContextCompat.getColor(context, R.color.accent_gold))
                 }
                 SignalStatus.WIN -> {
                     binding.tvStatus.text = "WIN ✅"
                     binding.tvStatus.setBackgroundResource(R.drawable.bg_badge_win)
                     binding.tvStatus.setTextColor(ContextCompat.getColor(context, R.color.black))
-                    binding.tvCountdown.text = "EXPIRED"
-                    binding.tvCountdown.setTextColor(ContextCompat.getColor(context, R.color.text_muted))
+                    binding.tvCountdown.text = "SETTLED"
+                    binding.tvCountdown.setTextColor(ContextCompat.getColor(context, R.color.signal_call))
                 }
                 SignalStatus.LOSS -> {
                     binding.tvStatus.text = "LOSS ❌"
                     binding.tvStatus.setBackgroundResource(R.drawable.bg_badge_loss)
                     binding.tvStatus.setTextColor(ContextCompat.getColor(context, R.color.white))
-                    binding.tvCountdown.text = "EXPIRED"
+                    binding.tvCountdown.text = "SETTLED"
                     binding.tvCountdown.setTextColor(ContextCompat.getColor(context, R.color.text_muted))
                 }
             }
